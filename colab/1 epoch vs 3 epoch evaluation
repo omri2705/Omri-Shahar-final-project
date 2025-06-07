@@ -1,0 +1,158 @@
+
+
+
+# ✅ Install required packages
+!pip install datasets transformers torch sentence-transformers rouge-score nltk --quiet
+
+# ✅ Disable tqdm globally
+import tqdm
+tqdm.tqdm = lambda *args, **kwargs: iter(args[0])
+
+# ✅ Import libraries
+import json
+import torch
+import random
+import matplotlib.pyplot as plt
+from datasets import load_dataset
+from transformers import GPT2Tokenizer, GPT2LMHeadModel
+from rouge_score import rouge_scorer
+from sentence_transformers import SentenceTransformer, util
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+import nltk
+
+# ✅ Download 'punkt' and 'punkt_tab' data for NLTK
+nltk.download('punkt')
+nltk.download('punkt_tab') # Download the missing 'punkt_tab' data
+
+from nltk.tokenize import word_tokenize
+
+# ✅ Mount Google Drive
+from google.colab import drive
+drive.mount('/content/drive')
+
+
+# ✅ Load evaluation dataset
+print("Loading evaluation dataset...")
+eval_dataset_path = "/content/drive/MyDrive/FinalProjectShaharAndOmriSpartans/datasets/evaluation/eval_dataset.jsonl"  # ✅ Modify to your path
+eval_dataset = load_dataset("json", data_files=eval_dataset_path, split="train")
+
+# ✅ Randomly select 50 examples for evaluation
+print("Selecting 50 random evaluation samples...")
+random.seed(42)
+eval_indices = random.sample(range(len(eval_dataset)), 50)
+small_eval_dataset = eval_dataset.select(eval_indices)
+
+# ✅ Setup scorer tools
+scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+smoother = SmoothingFunction().method4
+
+# ✅ Evaluation function
+def evaluate_model(model, tokenizer):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model.to(device)
+    model.eval()
+
+    rouge_scores, semsim_scores, bleu_scores = [], [], []
+
+    for example in small_eval_dataset:
+        prompt = example["prompt"]
+        reference = example["response"]
+
+        inputs = tokenizer(prompt, return_tensors="pt").to(device)
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=100,
+            do_sample=False
+        )
+        generated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+        # Remove prompt part
+        generated_output = generated_text[len(prompt):].strip()
+
+        # ROUGE
+        rouge = scorer.score(reference, generated_output)["rougeL"].fmeasure
+        # Semantic
+        ref_emb = sentence_model.encode(reference, convert_to_tensor=True)
+        out_emb = sentence_model.encode(generated_output, convert_to_tensor=True)
+        semsim = util.cos_sim(ref_emb, out_emb).item()
+        # BLEU
+        reference_tokens = [word_tokenize(reference.lower())]
+        output_tokens = word_tokenize(generated_output.lower())
+        bleu = sentence_bleu(reference_tokens, output_tokens, smoothing_function=smoother)
+
+        rouge_scores.append(rouge)
+        semsim_scores.append(semsim)
+        bleu_scores.append(bleu)
+
+    return sum(rouge_scores)/len(rouge_scores), sum(semsim_scores)/len(semsim_scores), sum(bleu_scores)/len(bleu_scores)
+
+# ✅ Training sizes
+sizes = [ 14000]
+
+# ✅ Define paths
+base_path = "/content/drive/MyDrive/FinalProjectShaharAndOmriSpartans/FinalProjectModel/SavedModels/"  # ✅ Replace with your real folder path
+path_1epoch = lambda size: f"{base_path}gpt_finetuned_1_epoch/gpt2_finetuned_{size}"
+path_3epochs = lambda size: f"{base_path}gpt_finetuned_3_epoch/gpt2_finetuned_3_epochs_{size}"
+
+# ✅ Store results
+results_1epoch = {"train_size": [], "rougeL": [], "semantic": [], "bleu": []}
+results_3epochs = {"train_size": [], "rougeL": [], "semantic": [], "bleu": []}
+
+print("Starting evaluation...")
+
+for size in sizes:
+    print(f"\nEvaluating models trained on {size} examples...")
+
+    # Load 1-epoch model
+    # ✅ Adding local_files_only=True to load from a local directory
+    # Passing the 'local_files_only' argument to the underlying 'pretrained_model_name_or_path'
+    model_1epoch = GPT2LMHeadModel.from_pretrained(path_1epoch(size), local_files_only=True)
+    tokenizer_1epoch = GPT2Tokenizer.from_pretrained(path_1epoch(size), local_files_only=True)
+    r1, s1, b1 = evaluate_model(model_1epoch, tokenizer_1epoch)
+
+    # Load 3-epoch model
+    # ✅ Adding local_files_only=True to load from a local directory
+    # Passing the 'local_files_only' argument to the underlying 'pretrained_model_name_or_path'
+    model_3epochs = GPT2LMHeadModel.from_pretrained(path_3epochs(size), local_files_only=True)
+    tokenizer_3epochs = GPT2Tokenizer.from_pretrained(path_3epochs(size), local_files_only=True)
+    r3, s3, b3 = evaluate_model(model_3epochs, tokenizer_3epochs)
+
+    # Store results
+    results_1epoch["train_size"].append(size)
+    results_1epoch["rougeL"].append(r1)
+    results_1epoch["semantic"].append(s1)
+    results_1epoch["bleu"].append(b1)
+
+    results_3epochs["train_size"].append(size)
+    results_3epochs["rougeL"].append(r3)
+    results_3epochs["semantic"].append(s3)
+    results_3epochs["bleu"].append(b3)
+
+    print(f"✅ 1 epoch — ROUGE-L: {r1:.4f}, Semantic: {s1:.4f}, BLEU: {b1:.4f}")
+    print(f"✅ 3 epochs — ROUGE-L: {r3:.4f}, Semantic: {s3:.4f}, BLEU: {b3:.4f}")
+
+# ✅ Plot all scores on one graph
+print("\nPlotting results...")
+plt.figure(figsize=(12, 6))
+
+# ROUGE-L
+plt.plot(results_1epoch["train_size"], results_1epoch["rougeL"], label="ROUGE-L (1 Epoch)", marker='o')
+plt.plot(results_3epochs["train_size"], results_3epochs["rougeL"], label="ROUGE-L (3 Epochs)", marker='o', linestyle='--')
+
+# Semantic
+plt.plot(results_1epoch["train_size"], results_1epoch["semantic"], label="Semantic (1 Epoch)", marker='^')
+plt.plot(results_3epochs["train_size"], results_3epochs["semantic"], label="Semantic (3 Epochs)", marker='^', linestyle='--')
+
+# BLEU
+plt.plot(results_1epoch["train_size"], results_1epoch["bleu"], label="BLEU (1 Epoch)", marker='s')
+plt.plot(results_3epochs["train_size"], results_3epochs["bleu"], label="BLEU (3 Epochs)", marker='s', linestyle='--')
+
+plt.xscale('log')
+plt.title("Evaluation Metrics vs Training Size 50 sets (1 vs 3 Epochs)")
+plt.xlabel("Training Set Size (log scale)")
+plt.ylabel("Score")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
