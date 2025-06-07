@@ -1,0 +1,118 @@
+# ✅ Install required packages
+!pip install datasets transformers torch sentence-transformers rouge-score nltk peft --quiet
+
+import os
+import torch
+import random
+import matplotlib.pyplot as plt
+from datasets import load_dataset
+from transformers import GPT2Tokenizer, GPT2LMHeadModel
+from peft import PeftModel
+from rouge_score import rouge_scorer
+from sentence_transformers import SentenceTransformer, util
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+import nltk
+
+# ✅ Download 'punkt' and 'punkt_tab' data for NLTK
+nltk.download('punkt')
+nltk.download('punkt_tab') # Download the missing 'punkt_tab' data
+
+from nltk.tokenize import word_tokenize
+
+# ✅ Mount Google Drive
+from google.colab import drive
+drive.mount("/content/drive")
+
+# ✅ Load evaluation dataset
+eval_path = "/content/drive/MyDrive/FinalProjectShaharAndOmriSpartans/datasets/evaluation/eval_dataset.jsonl"
+dataset = load_dataset("json", data_files=eval_path, split="train")
+
+# ✅ Sample 10 random examples
+random.seed(42)
+eval_dataset = dataset.select(random.sample(range(len(dataset)), 30))
+
+# ✅ Scorers
+rouge = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
+sbert = SentenceTransformer("all-MiniLM-L6-v2")
+smoother = SmoothingFunction().method4
+
+# ✅ Evaluation function
+def evaluate(model, tokenizer):
+    model.eval()
+    model.to("cuda" if torch.cuda.is_available() else "cpu")
+    rougeL, semsim, bleu = [], [], []
+
+    for ex in eval_dataset:
+        prompt = ex["prompt"]
+        ref = ex["response"]
+        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        output_ids = model.generate(**inputs, max_new_tokens=100)
+        gen_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)[len(prompt):].strip()
+
+        rougeL.append(rouge.score(ref, gen_text)["rougeL"].fmeasure)
+        e1 = sbert.encode(ref, convert_to_tensor=True)
+        e2 = sbert.encode(gen_text, convert_to_tensor=True)
+        semsim.append(util.cos_sim(e1, e2).item())
+        bleu.append(sentence_bleu([word_tokenize(ref.lower())],
+                                  word_tokenize(gen_text.lower()),
+                                  smoothing_function=smoother))
+    return sum(rougeL)/len(rougeL), sum(semsim)/len(semsim), sum(bleu)/len(bleu)
+
+# ✅ Model sizes
+sizes = [10, 50, 100, 200, 300, 400, 500, 1000, 5000, 14000]
+
+# ✅ Paths
+base_path = "/content/drive/MyDrive/FinalProjectShaharAndOmriSpartans/FinalProjectModel/SavedModels/"
+path_3epoch = lambda s: f"{base_path}gpt_finetuned_3_epoch/gpt2_finetuned_3_epochs_{s}"
+path_lora   = lambda s: f"{base_path}gpt_finetuned_lora_3_epoch/gpt2_lora_{s}"
+
+# ✅ Results storage
+results_3epoch = {"train_size": [], "rougeL": [], "semantic": [], "bleu": []}
+results_lora   = {"train_size": [], "rougeL": [], "semantic": [], "bleu": []}
+
+# ✅ Evaluate
+for size in sizes:
+    print(f"\nEvaluating size {size}...")
+
+    # --- 3 Epoch fine-tune ---
+    tok3 = GPT2Tokenizer.from_pretrained(path_3epoch(size), local_files_only=True)
+    mod3 = GPT2LMHeadModel.from_pretrained(path_3epoch(size), local_files_only=True)
+    r3, s3, b3 = evaluate(mod3, tok3)
+    results_3epoch["train_size"].append(size)
+    results_3epoch["rougeL"].append(r3)
+    results_3epoch["semantic"].append(s3)
+    results_3epoch["bleu"].append(b3)
+
+    # --- LoRA ---
+    tok_lora = GPT2Tokenizer.from_pretrained(path_lora(size), local_files_only=True)
+    base = GPT2LMHeadModel.from_pretrained("gpt2")
+    lora_model = PeftModel.from_pretrained(base, path_lora(size), local_files_only=True).merge_and_unload()
+    r_lora, s_lora, b_lora = evaluate(lora_model, tok_lora)
+    results_lora["train_size"].append(size)
+    results_lora["rougeL"].append(r_lora)
+    results_lora["semantic"].append(s_lora)
+    results_lora["bleu"].append(b_lora)
+
+    print(f"✅ 3 Epoch  → ROUGE-L: {r3:.4f}, SemSim: {s3:.4f}, BLEU: {b3:.4f}")
+    print(f"✅ LoRA     → ROUGE-L: {r_lora:.4f}, SemSim: {s_lora:.4f}, BLEU: {b_lora:.4f}")
+
+# ✅ Plot results
+plt.figure(figsize=(12,6))
+plt.xscale('log')
+
+plt.plot(results_3epoch["train_size"], results_3epoch["rougeL"], label="ROUGE-L (3 Epochs)", marker='o')
+plt.plot(results_lora["train_size"], results_lora["rougeL"], label="ROUGE-L (LoRA)", linestyle='--', marker='o')
+
+plt.plot(results_3epoch["train_size"], results_3epoch["semantic"], label="Semantic (3 Epochs)", marker='s')
+plt.plot(results_lora["train_size"], results_lora["semantic"], label="Semantic (LoRA)", linestyle='--', marker='s')
+
+plt.plot(results_3epoch["train_size"], results_3epoch["bleu"], label="BLEU (3 Epochs)", marker='^')
+plt.plot(results_lora["train_size"], results_lora["bleu"], label="BLEU (LoRA)", linestyle='--', marker='^')
+
+plt.title("Evaluation: 3 Epoch vs LoRA Finetuning ")
+plt.xlabel("Training Set Size (log scale)")
+plt.ylabel("Score")
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
