@@ -1,0 +1,153 @@
+import json
+import random
+
+# Define exercise categories with required equipment
+exercise_categories = {
+    "strength": {
+        "Dumbbells": ["Dumbbell Squats", "Dumbbell Bench Press", "Dumbbell Shoulder Press"],
+        "Barbells": ["Barbell Squats", "Barbell Deadlifts", "Barbell Bench Press"],
+        "Resistance Bands": ["Resistance Band Rows", "Resistance Band Squats", "Resistance Band Deadlifts"],
+        "Bodyweight": ["Push-ups", "Plank", "Bodyweight Squats"]
+    },
+    "cardio": {
+        "Treadmill": ["Treadmill Running", "Treadmill Walking Intervals"],
+        "Elliptical": ["Elliptical Training"],
+        "Rowing Machine": ["Rowing Machine Intervals"],
+        "Jump Rope": ["Jump Rope"]
+    },
+    "flexibility": {
+        "Yoga Mat": ["Yoga Stretch", "Cat-Cow Stretch", "Hamstring Stretch"],
+        "Bodyweight": ["Toe Touches", "Shoulder Rolls"]
+    }
+}
+
+# Determine number of workouts per week based on age and BMI
+def determine_workouts_per_week(age, bmi):
+    if age < 25:
+        if bmi < 18.5:
+            return 5, "This individual is young and underweight, so a higher frequency of 5 workouts per week is recommended to promote weight gain and muscle development."
+        elif bmi < 25:
+            return 4, "This individual is young and has a normal BMI, so 4 workouts per week are recommended for balanced fitness."
+        else:
+            return 3, "This individual is young but has a higher BMI, so 3 workouts per week are recommended to focus on gradual weight loss and recovery."
+    elif age < 50:
+        if bmi < 18.5:
+            return 4, "This individual is middle-aged and underweight, so 4 workouts per week are recommended to promote weight gain and muscle maintenance."
+        elif bmi < 25:
+            return 3, "This individual is middle-aged and has a normal BMI, so 3 workouts per week are recommended for balanced fitness."
+        else:
+            return 3, "This individual is middle-aged and has a higher BMI, so 3 workouts per week are recommended to focus on gradual weight loss and recovery."
+    else:
+        if bmi < 18.5:
+            return 3, "This individual is older and underweight, so 3 workouts per week are recommended to promote weight gain and avoid overexertion."
+        elif bmi < 25:
+            return 3, "This individual is older and has a normal BMI, so 3 workouts per week are recommended for balanced fitness and recovery."
+        else:
+            return 2, "This individual is older and has a higher BMI, so 2 workouts per week are recommended to focus on gradual weight loss and recovery."
+
+# Adjust strength intensity based on metrics
+def adjust_strength(age, sex, bmi):
+    if age < 25:
+        sets = 4
+        reps = 8 if bmi < 25 else 10
+    elif age <50:
+        sets = 3
+        reps =10 if bmi<25 else 12
+    else:
+        sets =2
+        reps=12 if bmi<25 else 15
+
+    if sex.lower() == 'female':
+        reps +=2
+
+    return sets,reps
+
+# Adjust cardio intervals based on metrics
+def adjust_cardio(age, sex, bmi):
+    interval_time,num_intervals,rest_time=1.5,6,1.5
+    if age<25:
+        interval_time,num_intervals,rest_time=2,8,1
+    elif age>=50:
+        interval_time,num_intervals,rest_time=1,4,2
+
+    if sex.lower()=='female':
+        interval_time-=0.2
+
+    if bmi>30:
+        interval_time-=0.3
+
+    return round(interval_time,1),num_intervals,rest_time
+
+# Adjust flexibility intervals based on metrics
+def adjust_flexibility(age):
+    interval_time,num_intervals=1.5,5
+    if age<25:
+        interval_time,num_intervals=2,6
+    elif age>=50:
+        interval_time,num_intervals=1.0,4
+    return interval_time,num_intervals
+
+# Generate dynamic workout plan clearly separated into days without naming weekdays.
+def generate_dynamic_workout(prompt):
+    def extract_value(key,prompt,type_cast=float):
+      try:return type_cast(prompt.split(f"{key}:")[1].split(",")[0].strip())
+      except:return None
+
+    fitness_goal=prompt.split("Fitness Goal:")[1].split(",")[0].strip()if"Fitness Goal:"in prompt else None
+    equipment=prompt.split("Equipment:")[1].split(",")if"Equipment:"in prompt else[]
+    equipment=[e.strip()for e in equipment]
+
+    age=extract_value("Age",prompt,int) or 30
+    sex=prompt.split("Sex:")[1].split(",")[0].strip()if"Sex:"in prompt else'Male'
+    weight=extract_value("Weight",prompt) or 70.0
+    height=extract_value("Height",prompt) or 1.75
+    bmi=extract_value("BMI",prompt)or round(weight/(height**2),2)
+
+    num_workouts_per_week,explanation=determine_workouts_per_week(age,bmi)
+
+    strength_exercises=[]
+    cardio_exercises=[]
+    flexibility_exercises=[]
+
+    for equip in equipment:
+      strength_exercises+=exercise_categories["strength"].get(equip,[])
+      cardio_exercises+=exercise_categories["cardio"].get(equip,[])
+      flexibility_exercises+=exercise_categories["flexibility"].get(equip,[])
+
+    if len(strength_exercises)<2:strength_exercises+=exercise_categories["strength"]["Bodyweight"]
+    if len(cardio_exercises)==0:cardio_exercises+=["Running in Place","Jumping Jacks"]
+    if len(flexibility_exercises)==0:flexibility_exercises+=exercise_categories["flexibility"]["Bodyweight"]
+
+    random.shuffle(strength_exercises)
+    random.shuffle(cardio_exercises)
+    random.shuffle(flexibility_exercises)
+
+    sets,reps=adjust_strength(age,sex,bmi)
+    cardio_interval,num_cardio_intervals,cardio_rest=adjust_cardio(age,sex,bmi)
+    flex_interval,num_flex_intervals=adjust_flexibility(age)
+
+    workout_plan=f"Weekly Workout Plan:\n\nExplanation: {explanation}\n\n"
+
+    for i in range(1,num_workouts_per_week+1):
+      workout_plan+=f"{i}:\n"
+      if i%3==1: # Strength day
+          workout_plan+=f"- Strength: {strength_exercises[i%len(strength_exercises)]} ({sets} sets x {reps} reps)\n"
+          workout_plan+=f"- Strength: {strength_exercises[(i+1)%len(strength_exercises)]} ({sets} sets x {reps} reps)\n\n"
+      elif i%3==2: # Cardio day
+          workout_plan+=f"- Cardio: {cardio_exercises[i%len(cardio_exercises)]} ({num_cardio_intervals} intervals of {cardio_interval} min; rest {cardio_rest} min between)\n\n"
+      else: # Flexibility day
+          workout_plan+=f"- Flexibility: {flexibility_exercises[i%len(flexibility_exercises)]} ({num_flex_intervals} intervals of {flex_interval} min each)\n\n"
+
+    return workout_plan.strip()
+
+input_file='/content/drive/MyDrive/FinalProjectShaharAndOmriSpartans/datasets/GOOD/gym_recommendations.txt'
+output_file='/content/drive/MyDrive/FinalProjectShaharAndOmriSpartans/datasets/GOOD/gym_recommendations_final_2.jsonl'
+
+with open(input_file,'r')as infile,open(output_file,'w')as outfile:
+   for line in infile:
+       data=json.loads(line.strip())
+       prompt=data["prompt"]
+       data["response"]=generate_dynamic_workout(prompt)
+       outfile.write(json.dumps(data)+"\n")
+
+print("✅ Personalized weekly plans generated successfully:",output_file)
