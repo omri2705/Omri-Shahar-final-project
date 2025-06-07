@@ -1,0 +1,86 @@
+#LORA Training 
+# ✅ Install dependencies
+!pip install -q peft transformers datasets sentence-transformers rouge-score nltk
+
+# ✅ Imports
+import os
+import torch
+from datasets import load_dataset
+from transformers import GPT2Tokenizer, GPT2LMHeadModel, TrainingArguments, Trainer, DataCollatorForLanguageModeling
+from peft import LoraConfig, get_peft_model, TaskType
+from tqdm import tqdm
+import nltk
+nltk.download("punkt")
+
+# ✅ Set paths
+json_path = "/kaggle/input/full-data-set-jsonl/gym_recommendations_final_2.jsonl"
+base_save_path = "/kaggle/working/gpt2_lora"
+
+# ✅ Load tokenizer once
+tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+tokenizer.pad_token = tokenizer.eos_token
+
+# LoRA configuration
+lora_config = LoraConfig(
+    r=32,                  
+    lora_alpha=64,          
+    lora_dropout=0.05,       
+    bias="none",
+    task_type=TaskType.CAUSAL_LM,
+)
+
+# ✅ Tokenization function
+def tokenize_function(examples):
+    return tokenizer(
+        [p + " " + r for p, r in zip(examples["prompt"], examples["response"])],
+        truncation=True,
+        padding="max_length"
+    )
+
+# ✅ Training sizes
+sizes = [10, 50, 100, 200, 300, 400, 500, 1000, 5000, 14000]
+
+# ✅ Loop through each training size
+for size in sizes:
+    print(f"\n🚀 Fine-tuning with {size} examples...")
+
+    # Reload a clean base model
+    base_model = GPT2LMHeadModel.from_pretrained("gpt2")
+    model = get_peft_model(base_model, lora_config)
+    model.print_trainable_parameters()
+
+    # Load dataset and tokenize
+    raw_dataset = load_dataset("json", data_files=json_path, split=f"train[:{size}]")
+    tokenized_dataset = raw_dataset.map(tokenize_function, batched=True)
+
+    # Prepare output directory
+    save_dir = f"{base_save_path}_{size}"
+
+    # ✅ Training arguments (unchanged except num_train_epochs)
+    training_args = TrainingArguments(
+        output_dir=save_dir,
+        per_device_train_batch_size=2,
+        gradient_accumulation_steps=2,
+        num_train_epochs=3,           # Increased from 1 → 3
+        save_strategy="no",
+        eval_strategy="no",
+        logging_steps=50,
+        report_to="none"
+    )
+
+    # ✅ Data collator
+    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+
+    # ✅ Trainer setup
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=tokenized_dataset,
+        data_collator=data_collator,
+    )
+
+    # ✅ Train and save
+    trainer.train()
+    model.save_pretrained(save_dir)
+    tokenizer.save_pretrained(save_dir)
+    print(f"✅ Saved LoRA model to: {save_dir}")
