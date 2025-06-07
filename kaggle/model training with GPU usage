@@ -1,0 +1,101 @@
+#LORA training with data collection
+# ✅ Install dependencies
+!pip install -q peft transformers datasets psutil
+
+# ✅ Imports
+import time
+import psutil
+import torch
+from datasets import load_dataset
+from transformers import GPT2Tokenizer, GPT2LMHeadModel, TrainingArguments, Trainer, DataCollatorForLanguageModeling
+from peft import LoraConfig, get_peft_model, TaskType
+import matplotlib.pyplot as plt
+import pandas as pd
+
+# ✅ Load dataset (1000 examples)
+json_path = "/kaggle/input/full-data-set-jsonl/gym_recommendations_final_2.jsonl"
+dataset = load_dataset("json", data_files=json_path, split="train[:1000]")
+
+# ✅ Load base model and tokenizer
+tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+tokenizer.pad_token = tokenizer.eos_token
+base_model = GPT2LMHeadModel.from_pretrained("gpt2")
+
+# ✅ Apply LoRA configuration
+lora_config = LoraConfig(
+    r=32,
+    lora_alpha=64,
+    lora_dropout=0.05,
+    bias="none",
+    task_type=TaskType.CAUSAL_LM,
+)
+model = get_peft_model(base_model, lora_config)
+
+# ✅ Tokenization
+def tokenize_function(examples):
+    return tokenizer(
+        [p + " " + r for p, r in zip(examples["prompt"], examples["response"])],
+        truncation=True,
+        padding="max_length"
+    )
+tokenized_dataset = dataset.map(tokenize_function, batched=True)
+
+# ✅ Data collator
+data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+
+# ✅ Training setup
+training_args = TrainingArguments(
+    output_dir="./gpt2_lora_3epochs",
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=2,
+    num_train_epochs=3,
+    save_strategy="no",
+    logging_steps=100,
+    report_to="none"
+)
+
+# ✅ Measure training time and system usage
+start_time = time.time()
+cpu_before = psutil.cpu_percent(interval=1)
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=tokenized_dataset,
+    data_collator=data_collator,
+)
+
+trainer.train()
+
+cpu_after = psutil.cpu_percent(interval=1)
+end_time = time.time()
+
+# ✅ Collect stats
+training_time = end_time - start_time
+gpu_memory = torch.cuda.max_memory_allocated() / (1024**2) if torch.cuda.is_available() else 0
+trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
+cpu_usage = (cpu_before + cpu_after) / 2
+
+# ✅ Print results
+results = {
+    "method": "LoRA 3 Epochs",
+    "training_time_sec": round(training_time, 2),
+    "gpu_allocated_mb": round(gpu_memory, 2),
+    "cpu_percent": round(cpu_usage, 2),
+    "trainable_params_million": round(trainable_params, 2)
+}
+
+df = pd.DataFrame([results])
+print("=== LoRA 3 Epoch Fine-Tuning Stats ===")
+print(df.to_markdown(index=False))
+
+# ✅ Optional: plot
+plt.figure(figsize=(10,4))
+plt.bar(["GPU MB", "CPU %", "Time (s)", "Params (M)"], 
+        [results["gpu_allocated_mb"], results["cpu_percent"], results["training_time_sec"], results["trainable_params_million"]],
+        color="green")
+plt.title("LoRA 3 Epoch Fine-Tuning Resource Usage")
+for i, v in enumerate([results["gpu_allocated_mb"], results["cpu_percent"], results["training_time_sec"], results["trainable_params_million"]]):
+    plt.text(i, v + 1, f"{v:.2f}", ha='center')
+plt.tight_layout()
+plt.show()
