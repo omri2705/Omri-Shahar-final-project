@@ -1,0 +1,90 @@
+#Regular finetune 
+# ✅ Install necessary packages
+print("Loading pip...")
+!pip install datasets transformers torch --quiet
+
+# ✅ Import libraries
+print("Import libraries...")
+import os
+import random
+import torch
+from datasets import load_dataset
+from transformers import GPT2Tokenizer, GPT2LMHeadModel, Trainer, TrainingArguments, DataCollatorForLanguageModeling
+
+# ✅ Load dataset
+print("Loading full dataset...")
+json_path = "/kaggle/input/full-data-set-jsonl/gym_recommendations_final_2.jsonl"
+full_dataset = load_dataset("json", data_files=json_path, split="train")
+
+# ✅ Random seed
+random.seed(42)
+
+# ✅ Split evaluation and training sets
+full_indices = list(range(len(full_dataset)))
+eval_indices = random.sample(full_indices, 1000)
+train_indices = list(set(full_indices) - set(eval_indices))
+train_dataset = full_dataset.select(train_indices)
+
+# ✅ Save evaluation set separately
+eval_dataset = full_dataset.select(eval_indices)
+eval_dataset.to_json("./eval_dataset.jsonl")
+
+# ✅ Load tokenizer
+tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+tokenizer.pad_token = tokenizer.eos_token
+
+# ✅ Tokenize function
+def tokenize_function(examples):
+    return tokenizer(
+        [p + " " + r for p, r in zip(examples["prompt"], examples["response"])],
+        truncation=True,
+        padding="max_length",
+        max_length=256
+    )
+
+# ✅ Sizes to train on
+sizes = [10, 50, 100, 200, 300, 400, 500, 1000, 5000]
+
+
+# ✅ Start training
+for size in sizes:
+    print(f"\nTraining on {size} examples...")
+    subset = train_dataset.shuffle(seed=42).select(range(size))
+    tokenized_subset = subset.map(tokenize_function, batched=True)
+    
+    # Load fresh model
+    model = GPT2LMHeadModel.from_pretrained("gpt2")
+    model.resize_token_embeddings(len(tokenizer))
+    model.gradient_checkpointing_enable()
+    model.to(torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
+    
+    # Setup training args
+    training_args = TrainingArguments(
+        output_dir=f"./gpt2_finetuned_{size}",
+        per_device_train_batch_size=2,
+        gradient_accumulation_steps=2,
+        num_train_epochs=3,
+        save_strategy="no",
+        eval_strategy="no",
+        report_to="none",
+        fp16=True if torch.cuda.is_available() else False,
+    )
+    
+    # Trainer
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=tokenized_subset,
+        data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False),
+    )
+    
+    # Fine-tune
+    trainer.train()
+    
+    # Save model and tokenizer
+    model.save_pretrained(f"./gpt2_finetuned_3_epoch_{size}")
+    tokenizer.save_pretrained(f"./gpt2_finetuned_3_epoch_{size}")
+    
+    print(f"✅ Model fine-tuned on {size} examples saved at ./gpt2_finetuned_3_epoch_{size}/")
+
+print("\nAll models trained and saved!")
