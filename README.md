@@ -15,20 +15,6 @@ We evaluate the generated outputs using:
 - **ROUGE-L**: Longest common subsequence-based recall score
 - **Semantic Similarity**: Using sentence embeddings from `all-MiniLM-L6-v2`
 
-## 📂 Contents
-
-│
-├── colab/
-│ └── evaluation_demo.ipynb ← Runs trained models on unseen examples + computes scores
-│
-├── kaggle/
-│ └── training_pipeline.ipynb ← Code for training GPT-2 using full fine-tuning and LoRA
-│
-├── datasets/
-│ └── eval_dataset.jsonl ← Evaluation dataset (100 examples not seen during training)
-│
-└── README.md
-
 
 ## 🧪 Evaluation Metrics
 
